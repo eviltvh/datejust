@@ -77,6 +77,15 @@ table.scan{width:100%;border-collapse:collapse;margin-top:26px;font-size:12px}
 .scan td{padding:8px 6px;border-bottom:1px solid var(--line)}
 .scan tr.r{cursor:pointer}
 .scan tr.on td{background:var(--yellow)}
+.stk{display:grid;gap:2px;align-items:center}
+.sl{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.08em}
+.sc{height:20px;border:1px solid var(--line);background:var(--soft)}
+.sc.tall{height:34px}
+.sc.off{border:0;background:transparent}
+.sc.hit{background:var(--pure);border-color:var(--pure)}
+.sc.top{background:var(--yellow)!important;outline:3px solid var(--pure);outline-offset:-1px;position:relative;z-index:1}
+.dh2{font-size:10px;color:var(--mute);height:14px;white-space:nowrap;overflow:visible}
+.sep{grid-column:1/-1;border-top:3px solid var(--pure);margin:6px 0}
 footer{font-size:11px;color:var(--mute);letter-spacing:.05em}
 </style>
 </head>
@@ -140,6 +149,30 @@ footer{font-size:11px;color:var(--mute);letter-spacing:.05em}
     <p class="hint">Línea rosa punteada = lo esperado si las fechas cayeran al azar. El p-valor sale de simular 2,000 repartos al azar con el mismo número de pistas (y los mismos pesos). Probar varias granularidades aumenta la chance de falsos positivos: confía más en un patrón que se repite en varias.</p>
   </section>
 
+  <section class="panel">
+    <h2>[Apilado]</h2>
+    <div class="row">
+      <div class="seg" id="grans2">
+        <button data-g="meses">Meses</button>
+        <button data-g="bimestres">Bimestres</button>
+        <button data-g="trimestres">Trimestres</button>
+        <button data-g="semestres">Semestres</button>
+      </div>
+      <label>Tolerancia
+        <select id="tol">
+          <option value="0">Exacta</option>
+          <option value="1">±1 día</option>
+          <option value="2">±2 días</option>
+          <option value="3">±3 días</option>
+        </select>
+      </label>
+    </div>
+    <div id="stackres" style="margin-top:22px"></div>
+    <div class="scroll" style="margin-top:22px"><div id="stack" class="stk"></div></div>
+    <div class="legend" id="stlegend"></div>
+    <p class="hint">Cada fila es un periodo recortado del año. Todas se alinean por día dentro del periodo y la fila SUMA las encima: más oscuro = más pistas apiladas. Amarillo = día donde coinciden más periodos distintos. El p-valor compara contra repartir al azar las fechas dentro de cada periodo (misma cantidad de pistas, mismos periodos).</p>
+  </section>
+
   <footer>TODO CORRE EN TU NAVEGADOR · SE GUARDA LOCALMENTE</footer>
 </main>
 
@@ -156,7 +189,7 @@ const HINTS={
   lineal:'Promedia de enero a diciembre sin dar la vuelta. Feb + oct da mitad de año. Útil para patrones tipo "pasa entre febrero y octubre".'
 };
 
-let state={pts:[{m:8,d:12,w:1},{m:8,d:14,w:1}],sigma:2,mode:'picos',gran:'meses'};
+let state={pts:[{m:8,d:12,w:1},{m:8,d:14,w:1}],sigma:2,mode:'picos',gran:'meses',tol:0};
 try{const s=JSON.parse(localStorage.getItem('cuando-fechas'));if(s&&Array.isArray(s.pts)){state=Object.assign(state,s)}}catch(e){}
 const save=()=>{try{localStorage.setItem('cuando-fechas',JSON.stringify(state))}catch(e){}};
 
@@ -274,6 +307,7 @@ function render(){
   }
   $('legend').innerHTML='poco '+LEVELS.map(c=>`<i style="background:${c}"></i>`).join('')+' mucho';
   renderPatterns();
+  renderStack();
 }
 
 /* ---------- Patrones por periodo ---------- */
@@ -329,7 +363,7 @@ function analyze(g){
   return {g,bk,obs,share,p,top,hot,empty,win,verdict,n};
 }
 function renderPatterns(){
-  document.querySelectorAll('#grans button').forEach(b=>b.classList.toggle('on',b.dataset.g===state.gran));
+  document.querySelectorAll('#grans button,#grans2 button').forEach(b=>b.classList.toggle('on',b.dataset.g===state.gran));
   const box=$('pat'),scan=$('scan');
   if(state.pts.length<2){box.innerHTML='<div class="empty">Agrega al menos 2 pistas. →</div>';scan.innerHTML='';return}
   const all={};for(const g in GRANS)all[g]=analyze(g);
@@ -362,7 +396,89 @@ function renderPatterns(){
   scan.innerHTML=t+'</table>';
   scan.querySelectorAll('tr.r').forEach(tr=>tr.onclick=()=>{state.gran=tr.dataset.g;save();render()});
 }
-document.querySelectorAll('#grans button').forEach(b=>b.onclick=()=>{state.gran=b.dataset.g;save();render()});
+document.querySelectorAll('#grans button,#grans2 button').forEach(b=>b.onclick=()=>{state.gran=b.dataset.g;save();render()});
+$('tol').onchange=e=>{state.tol=+e.target.value;save();render()};
+
+/* ---------- Apilado de periodos ---------- */
+const pop=x=>{let c=0;while(x){x&=x-1;c++}return c};
+function maxPer(arr,L,t){
+  const mk=new Int32Array(L+2);
+  for(const h of arr)for(let o=Math.max(1,h.o-t);o<=Math.min(L,h.o+t);o++)mk[o]|=1<<h.b;
+  let mx=0;for(let o=1;o<=L;o++){const c=pop(mk[o]);if(c>mx)mx=c}
+  return mx;
+}
+const stLevel=v=>v<0.05?0:v<1.4?1:v<2.4?2:v<3.4?3:4;
+function renderStack(){
+  document.querySelectorAll('#grans2 button').forEach(b=>b.classList.toggle('on',b.dataset.g===state.gran));
+  $('tol').value=String(state.tol||0);
+  const res=$('stackres'),box=$('stack'),leg=$('stlegend');
+  if(state.pts.length<2){res.innerHTML='<div class="empty">Agrega al menos 2 pistas. →</div>';box.innerHTML='';leg.innerHTML='';return}
+  const size=GRANS[state.gran].size,bk=bucketsFor(state.gran),B=bk.length,t=+state.tol||0;
+  const starts=[];let acc=0;
+  for(let b=0;b<B;b++){starts.push(acc);acc+=bk[b].len}
+  const L=Math.max(...bk.map(b=>b.len));
+  const hits=state.pts.map(p=>{const b=Math.floor(p.m/size);return {b,o:doy(p.m,p.d)-starts[b]+1,w:p.w,m:p.m,d:p.d}});
+
+  const sum=new Array(L+2).fill(0),mask=new Int32Array(L+2);
+  for(const h of hits)for(let o=Math.max(1,h.o-t);o<=Math.min(L,h.o+t);o++){
+    sum[o]+=h.w*(1-Math.abs(o-h.o)/(t+1));mask[o]|=1<<h.b;
+  }
+  const cnt=o=>pop(mask[o]);
+  let obsMax=0;for(let o=1;o<=L;o++)obsMax=Math.max(obsMax,cnt(o));
+
+  let p=1;
+  if(obsMax>=2){
+    const rand=rng(777),SIMS=1500;let ge=0;
+    for(let s=0;s<SIMS;s++){
+      const arr=hits.map(h=>({b:h.b,o:1+Math.floor(rand()*bk[h.b].len)}));
+      if(maxPer(arr,L,t)>=obsMax)ge++;
+    }
+    p=(ge+1)/(SIMS+1);
+  }
+
+  const cand=[];for(let o=1;o<=L;o++)if(cnt(o)>=2)cand.push(o);
+  cand.sort((a,b)=>cnt(b)-cnt(a)||sum[b]-sum[a]||a-b);
+  const picks=[];
+  for(const o of cand){if(picks.every(q=>Math.abs(q-o)>t))picks.push(o);if(picks.length===5)break}
+  const olab=o=>size===1?'Día '+o:'Día '+o+' del periodo';
+  const dates=o=>hits.filter(h=>Math.abs(h.o-o)<=t).sort((a,b)=>a.b-b.b).map(h=>h.d+' '+MESES[h.m]).join(' · ');
+
+  if(obsMax<2){
+    res.innerHTML='<div class="result"><div><div class="k">[Coincidencias]</div><div class="mid">Ninguna fecha se repite entre periodos</div></div></div><p class="hint">Prueba con más tolerancia o con otra granularidad.</p>';
+  }else{
+    const verdict=p<0.05?'NO PARECE AZAR':p<0.2?'INDICIO DÉBIL':'PUEDE SER AZAR';
+    let h=`<div class="result">
+      <div class="${p<0.05?'hl':''}"><div class="k">[Más apilado]</div><div class="big">Día ${picks[0]}</div></div>
+      <div><div class="k">[Coincide en]</div><div class="big">${obsMax} / ${B}</div></div>
+      <div><div class="k">[¿Azar?]</div><div class="mid">${verdict} · p=${p<0.001?'<0.001':p.toFixed(3)}</div></div></div><ul class="lines">`;
+    for(const o of picks)h+=`<li><b>${olab(o)}</b> → ${cnt(o)} periodos: ${dates(o)}</li>`;
+    res.innerHTML=h+'</ul>';
+  }
+
+  box.style.gridTemplateColumns=`92px repeat(${L},minmax(7px,1fr))`;
+  box.style.minWidth=Math.max(640,92+L*9)+'px';
+  box.innerHTML='';
+  const cell=(cls,html,title)=>{const e=document.createElement('div');e.className=cls;if(html!=null)e.innerHTML=html;if(title)e.title=title;box.append(e);return e};
+  const step=L<=31?1:L<=64?5:10;
+  cell('',null);
+  for(let o=1;o<=L;o++)cell('dh2',(o===1||o%step===0)?o:'');
+  cell('sl','SUMA');
+  for(let o=1;o<=L;o++){
+    const top=obsMax>=2&&cnt(o)===obsMax;
+    const e=cell('sc tall'+(top?' top':''),null,`${olab(o)} · suma ${sum[o].toFixed(2)} · ${cnt(o)} periodos`);
+    if(!top)e.style.background=LEVELS[stLevel(sum[o])];
+  }
+  cell('sep',null);
+  const hs=new Set(hits.map(h=>h.b+':'+h.o));
+  for(let b=0;b<B;b++){
+    cell('sl',bk[b].label);
+    for(let o=1;o<=L;o++){
+      if(o>bk[b].len){cell('sc off',null);continue}
+      cell('sc'+(hs.has(b+':'+o)?' hit':''),null,fmt(starts[b]+o-1));
+    }
+  }
+  leg.innerHTML='poco '+LEVELS.map(c=>`<i style="background:${c}"></i>`).join('')+' mucho &nbsp; <i style="background:#E8FF00"></i> máx. coincidencia &nbsp; <i style="background:#000"></i> pista';
+}
 
 $('add').onclick=()=>addPt(+mSel.value,+dSel.value,parseFloat($('w').value));
 $('clear').onclick=()=>{state.pts=[];save();render()};
